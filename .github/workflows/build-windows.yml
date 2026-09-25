@@ -38,12 +38,20 @@ jobs:
         shell: pwsh
         run: choco install nsis -y --no-progress
 
-      - name: Install SDRplay API headers/libs
+      - name: Install SDRplay API headers/libs (optional)
+        continue-on-error: true
         shell: pwsh
         run: |
-          Invoke-WebRequest https://www.sdrplay.com/software/SDRplay_RSP_API-Windows-3.15.exe -OutFile "$env:RUNNER_TEMP\sdrplay.exe"
+          $ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36"
+          $ok = $false
+          foreach ($v in "3.15", "3.14") {
+            try {
+              Invoke-WebRequest -UserAgent $ua "https://www.sdrplay.com/software/SDRplay_RSP_API-Windows-$v.exe" -OutFile "$env:RUNNER_TEMP\sdrplay.exe"
+              $ok = $true; break
+            } catch { Write-Host "SDRplay API $v download failed: $_" }
+          }
+          if (-not $ok) { Write-Host "::warning::SDRplay API unavailable, SoapySDRPlay3 module will be skipped"; exit 1 }
           7z x -o"C:\Program Files\SDRplay\" "$env:RUNNER_TEMP\sdrplay.exe" API/inc/* API/x64/* API/x86/*
-          Get-ChildItem -Recurse "C:\Program Files\SDRplay"
 
       - name: Setup MSVC developer environment
         uses: ilammy/msvc-dev-cmd@v1
