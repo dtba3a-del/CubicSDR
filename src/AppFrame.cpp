@@ -52,6 +52,7 @@ wxEND_EVENT_TABLE()
 #include "PortSelectorDialog.h"
 #include "rs232.h"
 #endif
+#include <chrono>
 
 
 
