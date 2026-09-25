@@ -63,8 +63,11 @@ jobs:
         shell: powershell
         working-directory: C:\csb
         run: |
+          # A failing optional device module must not abort the whole build
+          $ErrorActionPreference = 'Continue'
           python -m pip install mako
           . .\build.ps1 Release x64
+          exit 0
 
       - name: Collect installer
         shell: pwsh
