@@ -68,12 +68,24 @@ jobs:
         run: |
           # Прямой путь /software/SDRplay_RSP_API-Windows-*.exe отдаёт 403; сайт
           # раздаёт установщик через свой менеджер загрузок (замер 27.09).
+          # Установщик — Inno Setup: 7-Zip его не распаковывает (Files: 0),
+          # innoextract — да, и ничего не ставит в систему (ни драйвер, ни службу).
           $ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36"
-          Invoke-WebRequest -UserAgent $ua "https://sdrplay.com/download/hardware-api-windows/?wpdmdl=1905" -OutFile "$env:RUNNER_TEMP\sdrplay.exe"
-          (Get-Item "$env:RUNNER_TEMP\sdrplay.exe").Length
-          7z l "$env:RUNNER_TEMP\sdrplay.exe" | Select-String -Pattern "API[\\/](inc|x64|x86)" | Select-Object -First 20
-          7z x -o"C:\Program Files\SDRplay\" "$env:RUNNER_TEMP\sdrplay.exe" API/inc/* API/x64/* API/x86/* -y
-          Get-ChildItem -Recurse "C:\Program Files\SDRplay" | Select-Object -First 30 FullName
+          $exe = "$env:RUNNER_TEMP\sdrplay.exe"; $x = "$env:RUNNER_TEMP\sdrx"
+          Invoke-WebRequest -UserAgent $ua "https://sdrplay.com/download/hardware-api-windows/?wpdmdl=1905" -OutFile $exe
+          choco install innoextract -y --no-progress
+          innoextract -s -d $x $exe
+          $api = "C:\Program Files\SDRplay\API"
+          foreach ($d in "inc", "x64", "x86") { New-Item -ItemType Directory -Path "$api\$d" -Force | Out-Null }
+          Get-ChildItem -Recurse $x -Filter "sdrplay_api*.h" | Copy-Item -Destination "$api\inc"
+          Get-ChildItem -Recurse $x -Include "sdrplay_api.lib", "sdrplay_api.dll" | ForEach-Object {
+            $arch = if ($_.FullName -match '[\\/]x86[\\/]') { "x86" } else { "x64" }
+            Copy-Item $_.FullName "$api\$arch" }
+          # SoapySDRPlay3 (FindLibSDRplay.cmake) ищет API по ключу реестра, который пишет установщик
+          foreach ($k in "HKLM:\SOFTWARE\SDRplay\Service\API", "HKLM:\SOFTWARE\WOW6432Node\SDRplay\Service\API") {
+            New-Item -Path $k -Force | Out-Null
+            New-ItemProperty -Path $k -Name Install_Dir -Value $api -PropertyType String -Force | Out-Null }
+          Get-ChildItem -Recurse $api | Select-Object FullName, Length
 
       - name: Setup MSVC developer environment
         uses: ilammy/msvc-dev-cmd@v1
