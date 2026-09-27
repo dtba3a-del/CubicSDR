@@ -66,16 +66,14 @@ jobs:
         continue-on-error: true
         shell: pwsh
         run: |
+          # Прямой путь /software/SDRplay_RSP_API-Windows-*.exe отдаёт 403; сайт
+          # раздаёт установщик через свой менеджер загрузок (замер 27.09).
           $ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36"
-          $ok = $false
-          foreach ($v in "3.15", "3.14") {
-            try {
-              Invoke-WebRequest -UserAgent $ua "https://www.sdrplay.com/software/SDRplay_RSP_API-Windows-$v.exe" -OutFile "$env:RUNNER_TEMP\sdrplay.exe"
-              $ok = $true; break
-            } catch { Write-Host "SDRplay API $v download failed: $_" }
-          }
-          if (-not $ok) { Write-Host "::warning::SDRplay API unavailable, SoapySDRPlay3 module will be skipped"; exit 1 }
-          7z x -o"C:\Program Files\SDRplay\" "$env:RUNNER_TEMP\sdrplay.exe" API/inc/* API/x64/* API/x86/*
+          Invoke-WebRequest -UserAgent $ua "https://sdrplay.com/download/hardware-api-windows/?wpdmdl=1905" -OutFile "$env:RUNNER_TEMP\sdrplay.exe"
+          (Get-Item "$env:RUNNER_TEMP\sdrplay.exe").Length
+          7z l "$env:RUNNER_TEMP\sdrplay.exe" | Select-String -Pattern "API[\\/](inc|x64|x86)" | Select-Object -First 20
+          7z x -o"C:\Program Files\SDRplay\" "$env:RUNNER_TEMP\sdrplay.exe" API/inc/* API/x64/* API/x86/* -y
+          Get-ChildItem -Recurse "C:\Program Files\SDRplay" | Select-Object -First 30 FullName
 
       - name: Setup MSVC developer environment
         uses: ilammy/msvc-dev-cmd@v1
