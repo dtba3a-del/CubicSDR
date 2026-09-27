@@ -1,0 +1,140 @@
+name: Build Windows Installer
+
+on:
+  push:
+    branches: [ master, au/serene-wozniak-reg4pr ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  preflight:
+    # Параллельно со сборкой, ~1 мин: все внешние источники разом. Сломанный
+    # адрес или тег виден сразу, а не на 20-й минуте сборки.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: dtba3a-del/CubicSDR-WinBuild
+          ref: main
+      - name: Check download URLs and git tags
+        shell: bash
+        run: |
+          fail=0
+          for u in $(grep -hv '^[[:space:]]*#' scripts/*.ps1 | grep -oE 'https://[^ "`$]+' | grep -vE '\.git$|github\.com/[^/]+/[^/]+$' | sort -u); do
+            code=$(curl -sIL -A Wget -o /dev/null -w '%{http_code}' "$u" || echo 000)
+            echo "$code $u"; [ "$code" = 200 ] || fail=1
+          done
+          grep -hv '^[[:space:]]*#' scripts/*.ps1 | grep -oE -- '-b [^ ]+ https://[^ ]+' | sort -u | while read -r _ tag url; do
+            if git ls-remote --exit-code "$url" "refs/tags/$tag" >/dev/null; then echo "ok  $url@$tag"; else echo "NO  $url@$tag"; echo bad > /tmp/tagfail; fi
+          done
+          [ -f /tmp/tagfail ] && fail=1
+          exit $fail
+
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 350
+    env:
+      BUILD_DIR: C:\csb
+      CMAKE_BUILD_PARALLEL_LEVEL: 4
+    steps:
+      - name: Checkout CubicSDR
+        uses: actions/checkout@v4
+        with:
+          path: src
+
+      - name: Checkout WinBuild scripts
+        uses: actions/checkout@v4
+        with:
+          repository: dtba3a-del/CubicSDR-WinBuild
+          ref: main
+          path: winbuild
+
+      - name: Prepare build tree
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path "$env:BUILD_DIR\build-x64-Release\sources" -Force | Out-Null
+          Copy-Item -Recurse -Path winbuild\build.ps1, winbuild\scripts -Destination $env:BUILD_DIR
+          Copy-Item -Recurse -Path src -Destination "$env:BUILD_DIR\build-x64-Release\sources\CubicSDR"
+
+      - name: Install NSIS
+        shell: pwsh
+        run: choco install nsis -y --no-progress
+
+      - name: Install SDRplay API headers/libs (optional)
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          # Прямой путь /software/SDRplay_RSP_API-Windows-*.exe отдаёт 403; сайт
+          # раздаёт установщик через свой менеджер загрузок (замер 27.09).
+          # Установщик — Inno Setup: 7-Zip его не распаковывает (Files: 0),
+          # innoextract — да, и ничего не ставит в систему (ни драйвер, ни службу).
+          $ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36"
+          $exe = "$env:RUNNER_TEMP\sdrplay.exe"; $x = "$env:RUNNER_TEMP\sdrx"
+          Invoke-WebRequest -UserAgent $ua "https://sdrplay.com/download/hardware-api-windows/?wpdmdl=1905" -OutFile $exe
+          choco install innoextract -y --no-progress
+          innoextract -s -d $x $exe
+          $api = "C:\Program Files\SDRplay\API"
+          foreach ($d in "inc", "x64", "x86") { New-Item -ItemType Directory -Path "$api\$d" -Force | Out-Null }
+          Get-ChildItem -Recurse $x -Filter "sdrplay_api*.h" | Copy-Item -Destination "$api\inc"
+          Get-ChildItem -Recurse $x -Include "sdrplay_api.lib", "sdrplay_api.dll" | ForEach-Object {
+            $arch = if ($_.FullName -match '[\\/]x86[\\/]') { "x86" } else { "x64" }
+            Copy-Item $_.FullName "$api\$arch" }
+          # SoapySDRPlay3 (FindLibSDRplay.cmake) ищет API по ключу реестра, который пишет установщик
+          foreach ($k in "HKLM:\SOFTWARE\SDRplay\Service\API", "HKLM:\SOFTWARE\WOW6432Node\SDRplay\Service\API") {
+            New-Item -Path $k -Force | Out-Null
+            New-ItemProperty -Path $k -Name Install_Dir -Value $api -PropertyType String -Force | Out-Null }
+          Get-ChildItem -Recurse $api | Select-Object FullName, Length
+
+      - name: Setup MSVC developer environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: amd64
+
+      - name: Build
+        shell: powershell
+        working-directory: C:\csb
+        run: |
+          # A failing optional device module must not abort the whole build
+          $ErrorActionPreference = 'Continue'
+          python -m pip install mako
+          . .\build.ps1 Release x64
+          exit 0
+
+      - name: Module report
+        if: always()
+        shell: pwsh
+        run: |
+          $dir = "$env:BUILD_DIR\build-x64-Release\install\SoapySDR\lib\SoapySDR\modules0.8"
+          $want = [ordered]@{ "RTL-SDR"="rtlsdrSupport"; "HackRF"="HackRFSupport"; "Airspy"="airspySupport";
+            "Airspy HF+"="airspyhfSupport"; "PlutoSDR"="PlutoSDRSupport"; "Red Pitaya"="RedPitaya";
+            "SoapyRemote"="remoteSupport"; "Audio"="audioSupport"; "UHD"="uhdSupport";
+            "LimeSDR"="LMS7Support"; "SDRplay"="sdrPlaySupport" }
+          $lines = foreach ($k in $want.Keys) {
+            if (Test-Path "$dir\$($want[$k]).dll") { "- [x] $k" } else { "- [ ] $k — не собран" } }
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          ("Source commit: $env:GITHUB_SHA (scripts: dtba3a-del/CubicSDR-WinBuild)`n`n### Модули SoapySDR`n" + ($lines -join "`n")) | Tee-Object -FilePath dist/modules.md >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Collect installer
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Path "$env:BUILD_DIR\build-x64-Release\target\CubicSDR" -Filter "CubicSDR-*.exe" | Select-Object -First 1
+          if (-not $exe) { Write-Error "Installer not found"; exit 1 }
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          Copy-Item $exe.FullName dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CubicSDR-Windows-x64
+          path: dist/*.exe
+
+      - name: Publish pre-release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: windows-build-${{ github.run_number }}.${{ github.run_attempt }}
+          name: CubicSDR Windows x64 build ${{ github.run_number }}.${{ github.run_attempt }}
+          prerelease: true
+          target_commitish: ${{ github.sha }}
+          body_path: dist/modules.md
+          files: dist/*.exe

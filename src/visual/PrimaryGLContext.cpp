@@ -14,6 +14,7 @@
 #endif
 
 #include "CubicSDR.h"
+#include <chrono>
 
 wxString PrimaryGLContext::glGetwxString(GLenum name) {
     const GLubyte *v = glGetString(name);

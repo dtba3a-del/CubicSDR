@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0+
 
 #include "RigThread.h"
+#include <chrono>
 
 std::vector<const struct rig_caps *> RigThread::rigCaps;
 

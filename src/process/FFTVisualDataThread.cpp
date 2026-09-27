@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0+
 
 #include "FFTVisualDataThread.h"
+#include <chrono>
 
 FFTVisualDataThread::FFTVisualDataThread() {
 	linesPerSecond.store(DEFAULT_WATERFALL_LPS);

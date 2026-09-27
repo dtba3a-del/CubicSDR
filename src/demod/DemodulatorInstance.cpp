@@ -15,6 +15,7 @@
 #if USE_HAMLIB
 #include "RigThread.h"
 #endif
+#include <chrono>
 
 DemodVisualCue::DemodVisualCue() {
     squelchBreak.store(false);
